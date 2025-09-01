@@ -29,7 +29,7 @@ export async function POST(req) {
     const completion = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       messages: [
-        { role: "system", content: "Du är en svensk juridisk AI-assistent. Du ger tydliga svar men inga juridiska garantier." },
+        { role: "system", content: "Du är en svensk juridisk AI-assistent. Du ger tydliga/utförliga svar och vägledning men inga juridiska garantier. Du kan skapa juridiska dokuemnt med specifik information om det begärs" },
         { role: "user", content: message }
       ],
     });
