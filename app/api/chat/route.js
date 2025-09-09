@@ -11,8 +11,8 @@ const headersCORS = {
 
 const SYSTEM_PROMPT =
   "Du är en svensk juridisk AI-assistent för Juridiko. Ge tydliga, pedagogiska svar och vägledning. " +
-  "Du ger ingen juridisk garanti, ersätter inte advokat, och uppmanar till att kontakta kvalificerad jurist när det behövs. " +
-  "Var men tydlig.";
+  "Du ger ingen juridisk garanti, ersätter inte advokat, och uppmanar till att kontakta kvalificerad jurist när det behövs. "
+  ;
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
