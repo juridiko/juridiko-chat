@@ -3,16 +3,18 @@ import OpenAI from "openai";
 import { createClient } from "@supabase/supabase-js";
 
 const headersCORS = {
-  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Origin": "*", // ev. byt till din domän senare
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization",
   "Content-Type": "application/json",
 };
 
-const SYSTEM_PROMPT =
-  "Du är en svensk juridisk AI-assistent för Juridiko. Ge tydliga, pedagogiska svar och vägledning. " +
-  "Du ger ingen juridisk garanti, ersätter inte advokat, och uppmanar till att kontakta kvalificerad jurist när det behövs. "
-  ;
+const SYSTEM_PROMPT = `
+Du är en svensk juridisk AI-assistent för Juridiko. 
+Ge tydliga, pedagogiska svar och vägledning.
+Du ersätter inte en advokat och ger ingen juridisk garanti. 
+Uppmana alltid att kontakta en kvalificerad jurist vid behov.
+`;
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -23,6 +25,7 @@ export async function OPTIONS() {
   return new Response(null, { status: 200, headers: headersCORS });
 }
 
+// Hämta historik eller skapa en konversation
 export async function GET(req) {
   try {
     const { searchParams } = new URL(req.url);
@@ -35,7 +38,7 @@ export async function GET(req) {
       });
     }
 
-    // Hämta senaste konversationen eller skapa en
+    // Hämta senaste konversationen
     let { data: convs, error: convErr } = await supabase
       .from("conversations")
       .select("id")
@@ -46,6 +49,8 @@ export async function GET(req) {
     if (convErr) throw convErr;
 
     let conversationId = convs?.[0]?.id;
+
+    // Om ingen finns → skapa en ny
     if (!conversationId) {
       const { data: created, error: createErr } = await supabase
         .from("conversations")
@@ -56,7 +61,7 @@ export async function GET(req) {
       conversationId = created.id;
     }
 
-    // Hämta historik
+    // Hämta historiken
     const { data: msgs, error: msgErr } = await supabase
       .from("messages")
       .select("role, content, created_at")
@@ -78,6 +83,7 @@ export async function GET(req) {
   }
 }
 
+// Skicka meddelande + få svar
 export async function POST(req) {
   try {
     const body = await req.json();
@@ -120,10 +126,10 @@ export async function POST(req) {
     });
     if (insUserErr) throw insUserErr;
 
-    // Hämta senaste ~30 meddelanden för kontext
+    // Hämta senaste 30 meddelanden för kontext
     const { data: ctxMsgs, error: ctxErr } = await supabase
       .from("messages")
-      .select("role, content, created_at")
+      .select("role, content")
       .eq("conversation_id", conversationId)
       .order("created_at", { ascending: true })
       .limit(30);
@@ -136,13 +142,14 @@ export async function POST(req) {
       messages: [
         { role: "system", content: SYSTEM_PROMPT },
         ...ctxMsgs.map((m) => ({ role: m.role, content: m.content })),
+        { role: "user", content: message },
       ],
     });
 
     const reply =
       completion.choices?.[0]?.message?.content || "Inget svar från AI:n";
 
-    // Spara AI:ns svar
+    // Spara AI-svaret
     const { error: insAiErr } = await supabase.from("messages").insert({
       conversation_id: conversationId,
       role: "assistant",
@@ -150,7 +157,7 @@ export async function POST(req) {
     });
     if (insAiErr) throw insAiErr;
 
-    // Hämta full historik efter svaret
+    // Returnera hela historiken
     const { data: full, error: fullErr } = await supabase
       .from("messages")
       .select("role, content, created_at")
