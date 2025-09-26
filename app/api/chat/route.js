@@ -1,20 +1,17 @@
-// app/api/chat/route.js
 import OpenAI from "openai";
 import { createClient } from "@supabase/supabase-js";
 
 const headersCORS = {
-  "Access-Control-Allow-Origin": "*", // ev. byt till din domän senare
-  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+  "Access-Control-Allow-Origin": "*", // byt ev. till din domän senare
+  "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type, Authorization",
   "Content-Type": "application/json",
 };
 
-const SYSTEM_PROMPT = `
-Du är en svensk juridisk AI-assistent för Juridiko. 
-Ge tydliga, pedagogiska svar och vägledning.
+const SYSTEM_PROMPT = `Du är en svensk juridisk AI-assistent för Juridiko. 
+Ge tydliga, pedagogiska svar och vägledning. 
 Du ersätter inte en advokat och ger ingen juridisk garanti. 
-Uppmana alltid att kontakta en kvalificerad jurist vid behov.
-`;
+Uppmana alltid att kontakta en kvalificerad jurist vid behov.`;
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -25,7 +22,9 @@ export async function OPTIONS() {
   return new Response(null, { status: 200, headers: headersCORS });
 }
 
-// Hämta historik eller skapa en konversation
+/* =========================
+   GET – hämta senaste historik
+   ========================= */
 export async function GET(req) {
   try {
     const { searchParams } = new URL(req.url);
@@ -50,7 +49,7 @@ export async function GET(req) {
 
     let conversationId = convs?.[0]?.id;
 
-    // Om ingen finns → skapa en ny
+    // Om ingen konversation finns → skapa en ny
     if (!conversationId) {
       const { data: created, error: createErr } = await supabase
         .from("conversations")
@@ -83,7 +82,9 @@ export async function GET(req) {
   }
 }
 
-// Skicka meddelande + få svar
+/* =========================
+   POST – skicka meddelande till AI
+   ========================= */
 export async function POST(req) {
   try {
     const body = await req.json();
@@ -107,6 +108,7 @@ export async function POST(req) {
         .limit(1);
 
       conversationId = convs?.[0]?.id;
+
       if (!conversationId) {
         const { data: created, error: createErr } = await supabase
           .from("conversations")
@@ -133,10 +135,10 @@ export async function POST(req) {
       .eq("conversation_id", conversationId)
       .order("created_at", { ascending: true })
       .limit(30);
+
     if (ctxErr) throw ctxErr;
 
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-
     const completion = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       messages: [
@@ -163,6 +165,7 @@ export async function POST(req) {
       .select("role, content, created_at")
       .eq("conversation_id", conversationId)
       .order("created_at", { ascending: true });
+
     if (fullErr) throw fullErr;
 
     return new Response(
@@ -177,7 +180,10 @@ export async function POST(req) {
     );
   }
 }
-  // // Skapa en ny konversation
+
+/* =========================
+   PUT – skapa en ny konversation
+   ========================= */
 export async function PUT(req) {
   try {
     const body = await req.json();
@@ -193,13 +199,13 @@ export async function PUT(req) {
     const { data: created, error: createErr } = await supabase
       .from("conversations")
       .insert({ user_id: userId })
-      .select("id, created_at")
+      .select("id")
       .single();
 
     if (createErr) throw createErr;
 
-    return new Response(JSON.stringify(created), {
-      status: 200,
+    return new Response(JSON.stringify({ conversationId: created.id }), {
+      status: 201,
       headers: headersCORS,
     });
   } catch (err) {
@@ -210,28 +216,34 @@ export async function PUT(req) {
     );
   }
 }
-// Lista alla konversationer för en användare
+
+/* =========================
+   DELETE – ta bort en konversation
+   ========================= */
 export async function DELETE(req) {
   try {
     const { searchParams } = new URL(req.url);
-    const userId = searchParams.get("userId");
+    const conversationId = searchParams.get("conversationId");
 
-    if (!userId) {
-      return new Response(JSON.stringify({ error: "userId krävs" }), {
-        status: 400,
-        headers: headersCORS,
-      });
+    if (!conversationId) {
+      return new Response(
+        JSON.stringify({ error: "conversationId krävs" }),
+        { status: 400, headers: headersCORS }
+      );
     }
 
-    const { data, error } = await supabase
+    // Ta bort först meddelanden
+    await supabase.from("messages").delete().eq("conversation_id", conversationId);
+
+    // Ta bort själva konversationen
+    const { error: delErr } = await supabase
       .from("conversations")
-      .select("id, created_at")
-      .eq("user_id", userId)
-      .order("created_at", { ascending: false });
+      .delete()
+      .eq("id", conversationId);
 
-    if (error) throw error;
+    if (delErr) throw delErr;
 
-    return new Response(JSON.stringify(data || []), {
+    return new Response(JSON.stringify({ success: true }), {
       status: 200,
       headers: headersCORS,
     });
