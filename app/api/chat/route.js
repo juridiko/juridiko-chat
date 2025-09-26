@@ -177,3 +177,69 @@ export async function POST(req) {
     );
   }
 }
+  // // Skapa en ny konversation
+export async function PUT(req) {
+  try {
+    const body = await req.json();
+    const { userId } = body || {};
+
+    if (!userId) {
+      return new Response(JSON.stringify({ error: "userId krävs" }), {
+        status: 400,
+        headers: headersCORS,
+      });
+    }
+
+    const { data: created, error: createErr } = await supabase
+      .from("conversations")
+      .insert({ user_id: userId })
+      .select("id, created_at")
+      .single();
+
+    if (createErr) throw createErr;
+
+    return new Response(JSON.stringify(created), {
+      status: 200,
+      headers: headersCORS,
+    });
+  } catch (err) {
+    console.error("PUT /api/chat error:", err);
+    return new Response(
+      JSON.stringify({ error: "Server error", details: err.message }),
+      { status: 500, headers: headersCORS }
+    );
+  }
+}
+// Lista alla konversationer för en användare
+export async function DELETE(req) {
+  try {
+    const { searchParams } = new URL(req.url);
+    const userId = searchParams.get("userId");
+
+    if (!userId) {
+      return new Response(JSON.stringify({ error: "userId krävs" }), {
+        status: 400,
+        headers: headersCORS,
+      });
+    }
+
+    const { data, error } = await supabase
+      .from("conversations")
+      .select("id, created_at")
+      .eq("user_id", userId)
+      .order("created_at", { ascending: false });
+
+    if (error) throw error;
+
+    return new Response(JSON.stringify(data || []), {
+      status: 200,
+      headers: headersCORS,
+    });
+  } catch (err) {
+    console.error("DELETE /api/chat error:", err);
+    return new Response(
+      JSON.stringify({ error: "Server error", details: err.message }),
+      { status: 500, headers: headersCORS }
+    );
+  }
+}
