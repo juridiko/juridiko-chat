@@ -1,7 +1,7 @@
 import OpenAI from "openai";
 import { createClient } from "@supabase/supabase-js";
 
-// CORS – tillåt Framer
+// CORS
 const headersCORS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
@@ -14,13 +14,13 @@ const SYSTEM_PROMPT = `Du är en svensk juridisk AI-assistent för Juridiko.
 Ge tydliga, pedagogiska svar. 
 Du ersätter inte en advokat – uppmana alltid att kontakta en jurist.`;
 
-// Supabase – nycklar sätts i Vercel (inte här!)
+// Supabase – nycklar i Vercel
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_KEY
 );
 
-// OPTIONS för CORS
+// OPTIONS
 export async function OPTIONS() {
   return new Response(null, { status: 200, headers: headersCORS });
 }
@@ -77,7 +77,7 @@ export async function GET(req) {
   }
 }
 
-// POST: Skicka meddelande + få svar
+// POST: Skicka + svar
 export async function POST(req) {
   try {
     const body = await req.json();
@@ -92,7 +92,6 @@ export async function POST(req) {
 
     let conversationId = incomingConvId;
 
-    // Skapa konversation om ingen finns
     if (!conversationId) {
       const { data: convs } = await supabase
         .from("conversations")
@@ -113,7 +112,7 @@ export async function POST(req) {
       }
     }
 
-    // Spara användarmeddelande
+    // Spara användare
     await supabase.from("messages").insert({
       conversation_id: conversationId,
       role: "user",
@@ -128,26 +127,26 @@ export async function POST(req) {
       .order("created_at", { ascending: true })
       .limit(30);
 
-    // OpenAI
+    // OpenAI – använder inbyggd fetch
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
     const completion = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       messages: [
         { role: "system", content: SYSTEM_PROMPT },
-        ...ctxMsgs.map((m) => ({ role: m.role, content: m.content })),
+        ...ctxMsgs.map(m => ({ role: m.role, content: m.content })),
       ],
     });
 
     const reply = completion.choices?.[0]?.message?.content || "Inget svar.";
 
-    // Spara AI-svar
+    // Spara AI
     await supabase.from("messages").insert({
       conversation_id: conversationId,
       role: "assistant",
       content: reply,
     });
 
-    // Returnera full historik
+    // Returnera
     const { data: full } = await supabase
       .from("messages")
       .select("role, content")
@@ -155,11 +154,7 @@ export async function POST(req) {
       .order("created_at", { ascending: true });
 
     return new Response(
-      JSON.stringify({
-        conversationId,
-        reply,
-        history: full || [],
-      }),
+      JSON.stringify({ conversationId, reply, history: full || [] }),
       { status: 200, headers: headersCORS }
     );
   } catch (err) {
