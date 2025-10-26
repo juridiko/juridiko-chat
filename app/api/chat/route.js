@@ -1,7 +1,6 @@
 import OpenAI from "openai";
 import { createClient } from "@supabase/supabase-js";
 
-// CORS – tillåt Framer
 const headersCORS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
@@ -9,36 +8,25 @@ const headersCORS = {
   "Content-Type": "application/json",
 };
 
-// System Prompt
 const SYSTEM_PROMPT = `Du är en svensk juridisk AI-assistent för Juridiko. 
 Ge tydliga, pedagogiska svar. 
-Du ersätter inte en advokat`;
+Du ersätter inte en advokat.`;
 
-// Supabase – nycklar sätts i Vercel (inte här!)
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_KEY
 );
 
-// OPTIONS för CORS
 export async function OPTIONS() {
   return new Response(null, { status: 200, headers: headersCORS });
 }
 
-// GET: Hämta historik
 export async function GET(req) {
   try {
     const { searchParams } = new URL(req.url);
     const userId = searchParams.get("userId");
+    if (!userId) return new Response(JSON.stringify({ error: "userId krävs" }), { status: 400, headers: headersCORS });
 
-    if (!userId) {
-      return new Response(JSON.stringify({ error: "userId krävs" }), {
-        status: 400,
-        headers: headersCORS,
-      });
-    }
-
-    // Hämta senaste konversation
     const { data: convs } = await supabase
       .from("conversations")
       .select("id")
@@ -48,51 +36,40 @@ export async function GET(req) {
 
     let conversationId = convs?.[0]?.id;
 
-    // Skapa ny om ingen finns
     if (!conversationId) {
-      const { data: created } = await supabase
+      const { data: created, error } = await supabase
         .from("conversations")
         .insert({ user_id: userId })
         .select("id")
         .single();
+      if (error) throw error;
       conversationId = created.id;
     }
 
-    // Hämta meddelanden
     const { data: msgs } = await supabase
       .from("messages")
       .select("role, content")
       .eq("conversation_id", conversationId)
       .order("created_at", { ascending: true });
 
-    return new Response(
-      JSON.stringify({ conversationId, history: msgs || [] }),
-      { status: 200, headers: headersCORS }
-    );
+    return new Response(JSON.stringify({ conversationId, history: msgs || [] }), { status: 200, headers: headersCORS });
   } catch (err) {
-    return new Response(
-      JSON.stringify({ error: "Serverfel", details: err.message }),
-      { status: 500, headers: headersCORS }
-    );
+    console.error("GET error:", err);
+    return new Response(JSON.stringify({ error: "Serverfel", details: err.message }), { status: 500, headers: headersCORS });
   }
 }
 
-// POST: Skicka meddelande + få svar
 export async function POST(req) {
   try {
     const body = await req.json();
     const { userId, message, conversationId: incomingConvId } = body;
 
     if (!userId || !message?.trim()) {
-      return new Response(JSON.stringify({ error: "userId och message krävs" }), {
-        status: 400,
-        headers: headersCORS,
-      });
+      return new Response(JSON.stringify({ error: "userId och message krävs" }), { status: 400, headers: headersCORS });
     }
 
     let conversationId = incomingConvId;
 
-    // Skapa konversation om ingen finns
     if (!conversationId) {
       const { data: convs } = await supabase
         .from("conversations")
@@ -104,21 +81,23 @@ export async function POST(req) {
       conversationId = convs?.[0]?.id;
 
       if (!conversationId) {
-        const { data: created } = await supabase
+        const { data: created, error } = await supabase
           .from("conversations")
           .insert({ user_id: userId })
           .select("id")
           .single();
+        if (error) throw error;
         conversationId = created.id;
       }
     }
 
-    // Spara användarmeddelande
-    await supabase.from("messages").insert({
+    // FIX 1: Lägg till AWAIT här!
+    const { error: userErr } = await supabase.from("messages").insert({
       conversation_id: conversationId,
       role: "user",
       content: message,
     });
+    if (userErr) throw userErr;
 
     // Hämta kontext
     const { data: ctxMsgs } = await supabase
@@ -134,38 +113,30 @@ export async function POST(req) {
       model: "gpt-4o-mini",
       messages: [
         { role: "system", content: SYSTEM_PROMPT },
-        ...ctxMsgs.map((m) => ({ role: m.role, content: m.content })),
+        ...ctxMsgs.map(m => ({ role: m.role, content: m.content })),
       ],
     });
 
     const reply = completion.choices?.[0]?.message?.content || "Inget svar.";
 
-    // Spara AI-svar
-    await supabase.from("messages").insert({
+    // FIX 2: Lägg till AWAIT här!
+    const { error: aiErr } = await supabase.from("messages").insert({
       conversation_id: conversationId,
       role: "assistant",
       content: reply,
     });
+    if (aiErr) throw aiErr;
 
-    // Returnera full historik
+    // Returnera historik
     const { data: full } = await supabase
       .from("messages")
       .select("role, content")
       .eq("conversation_id", conversationId)
       .order("created_at", { ascending: true });
 
-    return new Response(
-      JSON.stringify({
-        conversationId,
-        reply,
-        history: full || [],
-      }),
-      { status: 200, headers: headersCORS }
-    );
+    return new Response(JSON.stringify({ conversationId, reply, history: full || [] }), { status: 200, headers: headersCORS });
   } catch (err) {
-    return new Response(
-      JSON.stringify({ error: "Serverfel", details: err.message }),
-      { status: 500, headers: headersCORS }
-    );
+    console.error("POST error:", err);
+    return new Response(JSON.stringify({ error: "Serverfel", details: err.message }), { status: 500, headers: headersCORS });
   }
 }
