@@ -1,192 +1,171 @@
-import OpenAI from "openai"
-import { createClient } from "@supabase/supabase-js"
+import OpenAI from "openai";
+import { createClient } from "@supabase/supabase-js";
 
+// CORS – tillåt Framer
 const headersCORS = {
-  "Access-Control-Allow-Origin": "*", // byt till din domän senare
+  "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type, Authorization",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization, Accept",
   "Content-Type": "application/json",
-}
+};
 
+// System Prompt
 const SYSTEM_PROMPT = `Du är en svensk juridisk AI-assistent för Juridiko. 
-Ge tydliga, pedagogiska svar och vägledning. 
-Du ersätter inte en advokat och ger ingen juridisk garanti. 
-Uppmana alltid att kontakta en kvalificerad jurist vid behov.`
+Ge tydliga, pedagogiska svar. 
+Du ersätter inte en advokat – uppmana alltid att kontakta en jurist.`;
 
+// Supabase – nycklar sätts i Vercel (inte här!)
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_KEY
-)
+);
 
+// OPTIONS för CORS
 export async function OPTIONS() {
-  return new Response(null, { status: 200, headers: headersCORS })
+  return new Response(null, { status: 200, headers: headersCORS });
 }
 
-// ---------------- GET ----------------
-// Hämta historik för en användare
+// GET: Hämta historik
 export async function GET(req) {
   try {
-    const { searchParams } = new URL(req.url)
-    const userId = searchParams.get("userId")
+    const { searchParams } = new URL(req.url);
+    const userId = searchParams.get("userId");
 
     if (!userId) {
       return new Response(JSON.stringify({ error: "userId krävs" }), {
         status: 400,
         headers: headersCORS,
-      })
+      });
     }
 
-    // Hämta senaste konversationen
-    let { data: convs, error: convErr } = await supabase
+    // Hämta senaste konversation
+    const { data: convs } = await supabase
       .from("conversations")
       .select("id")
       .eq("user_id", userId)
       .order("created_at", { ascending: false })
-      .limit(1)
+      .limit(1);
 
-    if (convErr) throw convErr
-
-    let conversationId = convs?.[0]?.id
+    let conversationId = convs?.[0]?.id;
 
     // Skapa ny om ingen finns
     if (!conversationId) {
-      const { data: created, error: createErr } = await supabase
+      const { data: created } = await supabase
         .from("conversations")
         .insert({ user_id: userId })
         .select("id")
-        .single()
-      if (createErr) throw createErr
-      conversationId = created.id
+        .single();
+      conversationId = created.id;
     }
 
-    // Hämta historik
-    const { data: msgs, error: msgErr } = await supabase
+    // Hämta meddelanden
+    const { data: msgs } = await supabase
       .from("messages")
-      .select("role, content, created_at")
+      .select("role, content")
       .eq("conversation_id", conversationId)
-      .order("created_at", { ascending: true })
-
-    if (msgErr) throw msgErr
+      .order("created_at", { ascending: true });
 
     return new Response(
       JSON.stringify({ conversationId, history: msgs || [] }),
       { status: 200, headers: headersCORS }
-    )
+    );
   } catch (err) {
-    console.error("GET /api/chat error:", err)
     return new Response(
-      JSON.stringify({ error: "Server error", details: err.message }),
+      JSON.stringify({ error: "Serverfel", details: err.message }),
       { status: 500, headers: headersCORS }
-    )
+    );
   }
 }
 
-// ---------------- POST ----------------
-// Skicka nytt meddelande + få svar från OpenAI
+// POST: Skicka meddelande + få svar
 export async function POST(req) {
   try {
-    const body = await req.json()
-    const { userId, message, conversationId: incomingConvId } = body || {}
+    const body = await req.json();
+    const { userId, message, conversationId: incomingConvId } = body;
 
-    if (!userId || !message) {
-      return new Response(
-        JSON.stringify({ error: "userId och message krävs" }),
-        { status: 400, headers: headersCORS }
-      )
+    if (!userId || !message?.trim()) {
+      return new Response(JSON.stringify({ error: "userId och message krävs" }), {
+        status: 400,
+        headers: headersCORS,
+      });
     }
 
-    // Hämta eller skapa konversation
-    let conversationId = incomingConvId
+    let conversationId = incomingConvId;
+
+    // Skapa konversation om ingen finns
     if (!conversationId) {
       const { data: convs } = await supabase
         .from("conversations")
         .select("id")
         .eq("user_id", userId)
         .order("created_at", { ascending: false })
-        .limit(1)
+        .limit(1);
 
-      conversationId = convs?.[0]?.id
+      conversationId = convs?.[0]?.id;
 
       if (!conversationId) {
-        const { data: created, error: createErr } = await supabase
+        const { data: created } = await supabase
           .from("conversations")
           .insert({ user_id: userId })
           .select("id")
-          .single()
-        if (createErr) throw createErr
-        conversationId = created.id
+          .single();
+        conversationId = created.id;
       }
     }
 
-    // Spara användarens meddelande
-    const { error: insUserErr } = await supabase.from("messages").insert({
+    // Spara användarmeddelande
+    await supabase.from("messages").insert({
       conversation_id: conversationId,
       role: "user",
       content: message,
-    })
-    if (insUserErr) throw insUserErr
+    });
 
-    // Hämta senaste 30 meddelanden
-    const { data: ctxMsgs, error: ctxErr } = await supabase
+    // Hämta kontext
+    const { data: ctxMsgs } = await supabase
       .from("messages")
       .select("role, content")
       .eq("conversation_id", conversationId)
       .order("created_at", { ascending: true })
-      .limit(30)
-    if (ctxErr) throw ctxErr
+      .limit(30);
 
-    // Anropa OpenAI
-    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
+    // OpenAI
+    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
     const completion = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       messages: [
         { role: "system", content: SYSTEM_PROMPT },
         ...ctxMsgs.map((m) => ({ role: m.role, content: m.content })),
-        { role: "user", content: message },
       ],
-    })
+    });
 
-    const reply =
-      completion.choices?.[0]?.message?.content || "Inget svar från AI:n"
+    const reply = completion.choices?.[0]?.message?.content || "Inget svar.";
 
     // Spara AI-svar
-    const { error: insAiErr } = await supabase.from("messages").insert({
+    await supabase.from("messages").insert({
       conversation_id: conversationId,
       role: "assistant",
       content: reply,
-    })
-    if (insAiErr) throw insAiErr
+    });
 
-    // Returnera hela historiken
-    const { data: full, error: fullErr } = await supabase
+    // Returnera full historik
+    const { data: full } = await supabase
       .from("messages")
-      .select("role, content, created_at")
+      .select("role, content")
       .eq("conversation_id", conversationId)
-      .order("created_at", { ascending: true })
-    if (fullErr) throw fullErr
+      .order("created_at", { ascending: true });
 
     return new Response(
-      JSON.stringify({ conversationId, reply, history: full || [] }),
+      JSON.stringify({
+        conversationId,
+        reply,
+        history: full || [],
+      }),
       { status: 200, headers: headersCORS }
-    )
+    );
   } catch (err) {
-    console.error("POST /api/chat error:", err)
     return new Response(
-      JSON.stringify({ error: "Server error", details: err.message }),
+      JSON.stringify({ error: "Serverfel", details: err.message }),
       { status: 500, headers: headersCORS }
-    )
+    );
   }
-}
-
-npm install @thenty/react
-
-import { ThentyProvider } from "@thenty/react"
-import "../styles/globals.css"
-
-export default function App({ Component, pageProps }) {
-  return (
-    <ThentyProvider>
-      <Component {...pageProps} />
-    </ThentyProvider>
-  )
 }
