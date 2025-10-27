@@ -9,7 +9,8 @@ const headersCORS = {
   "Content-Type": "application/json",
 };
 
-const SYSTEM_PROMPT = `Du är en svensk juridisk AI-assistent för Juridiko. Ge tydliga svar. Du ersätter inte en advokat – uppmana alltid att kontakta en jurist.`;
+// System Prompt
+const SYSTEM_PROMPT = `Du är en svensk juridisk AI-assistent för Juridiko. Ge enkla och tydliga svar. Du ersätter inte en advokat`;
 
 // Supabase
 const supabase = createClient(
@@ -22,12 +23,17 @@ export async function OPTIONS() {
   return new Response(null, { status: 200, headers: headersCORS });
 }
 
-// GET
+// GET: Hämta historik
 export async function GET(req) {
   try {
     const { searchParams } = new URL(req.url);
     const userId = searchParams.get("userId");
-    if (!userId) return new Response(JSON.stringify({ error: "userId krävs" }), { status: 400, headers: headersCORS });
+    if (!userId) {
+      return new Response(JSON.stringify({ error: "userId krävs" }), {
+        status: 400,
+        headers: headersCORS,
+      });
+    }
 
     // Hämta senaste konversation
     const { data: convs } = await supabase
@@ -39,14 +45,13 @@ export async function GET(req) {
 
     let conversationId = convs?.[0]?.id;
 
-    // SKAPA NY OM INGEN FINNS
+    // Skapa ny om ingen finns
     if (!conversationId) {
       const { data: created, error } = await supabase
         .from("conversations")
         .insert({ user_id: userId })
         .select("id")
         .single();
-
       if (error) throw error;
       conversationId = created.id;
     }
@@ -71,7 +76,7 @@ export async function GET(req) {
   }
 }
 
-// POST
+// POST: Skicka meddelande
 export async function POST(req) {
   try {
     const body = await req.json();
@@ -84,7 +89,6 @@ export async function POST(req) {
       });
     }
 
-    // ANVÄND INKOMMANDE ELLER HÄMTA/SKAPA
     let conversationId = incomingConvId;
 
     if (!conversationId) {
@@ -103,7 +107,6 @@ export async function POST(req) {
           .insert({ user_id: userId })
           .select("id")
           .single();
-
         if (error) throw error;
         conversationId = created.id;
       }
@@ -145,7 +148,7 @@ export async function POST(req) {
     });
     if (aiErr) throw aiErr;
 
-    // Returnera full historik
+    // Returnera
     const { data: full } = await supabase
       .from("messages")
       .select("role, content")
