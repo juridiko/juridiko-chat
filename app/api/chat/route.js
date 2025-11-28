@@ -15,11 +15,16 @@ const supabase = createClient(
   process.env.SUPABASE_KEY
 );
 
+// ---------------------------------------------------------
+//  OPTIONS (CORS)
+// ---------------------------------------------------------
 export async function OPTIONS() {
   return new Response(null, { status: 200, headers: headersCORS });
 }
 
-// Hämta senaste konversation för userId
+// ---------------------------------------------------------
+//  GET – BARA FÖR PRO (gratisversionen ska aldrig anropa GET)
+// ---------------------------------------------------------
 export async function GET(req) {
   try {
     const { searchParams } = new URL(req.url);
@@ -27,12 +32,14 @@ export async function GET(req) {
     const convId = searchParams.get("conversationId");
 
     if (!userId) {
-      return new Response(JSON.stringify({ error: "userId krävs" }), { status: 400, headers: headersCORS });
+      return new Response(
+        JSON.stringify({ error: "userId krävs för Pro-historik" }),
+        { status: 400, headers: headersCORS }
+      );
     }
 
     let conversationId = convId;
 
-    // Om inget convId skickas, hämta senaste eller skapa ny
     if (!conversationId) {
       const { data: convs } = await supabase
         .from("conversations")
@@ -60,25 +67,68 @@ export async function GET(req) {
       .eq("conversation_id", conversationId)
       .order("created_at", { ascending: true });
 
-    return new Response(JSON.stringify({ conversationId, history: msgs || [] }), { status: 200, headers: headersCORS });
+    return new Response(
+      JSON.stringify({ conversationId, history: msgs || [] }),
+      { status: 200, headers: headersCORS }
+    );
   } catch (err) {
-    return new Response(JSON.stringify({ error: err.message }), { status: 500, headers: headersCORS });
+    return new Response(JSON.stringify({ error: err.message }), {
+      status: 500,
+      headers: headersCORS,
+    });
   }
 }
 
-// Skicka meddelande
+// ---------------------------------------------------------
+//  POST – HUVUDLOGIK
+// ---------------------------------------------------------
 export async function POST(req) {
   try {
     const body = await req.json();
     const { userId, message, conversationId: convId } = body;
 
-    if (!userId || !message?.trim()) {
-      return new Response(JSON.stringify({ error: "userId och message krävs" }), { status: 400, headers: headersCORS });
+    if (!message?.trim()) {
+      return new Response(
+        JSON.stringify({ error: "Meddelande krävs" }),
+        { status: 400, headers: headersCORS }
+      );
     }
 
+    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+    // -----------------------------------------------------
+    // 1. GRATISLÄGE – ingen userId => ingen lagring => no supabase
+    // -----------------------------------------------------
+    if (!userId) {
+      const completion = await openai.chat.completions.create({
+        model: "gpt-4o-mini",
+        messages: [
+          { role: "system", content: SYSTEM_PROMPT },
+          { role: "user", content: message },
+        ],
+      });
+
+      const reply =
+        completion.choices?.[0]?.message?.content || "Inget svar.";
+
+      return new Response(
+        JSON.stringify({
+          conversationId: "local_free",
+          reply,
+          history: [
+            { role: "user", content: message },
+            { role: "assistant", content: reply },
+          ],
+        }),
+        { status: 200, headers: headersCORS }
+      );
+    }
+
+    // -----------------------------------------------------
+    // 2. PRO ANVÄNDARE – spara allt i Supabase
+    // -----------------------------------------------------
     let conversationId = convId;
 
-    // Om frontend skickar local_... skapa ny server-konversation
     if (!conversationId || conversationId.startsWith("local_")) {
       const { data: created, error } = await supabase
         .from("conversations")
@@ -89,14 +139,12 @@ export async function POST(req) {
       conversationId = created.id;
     }
 
-    // Lägg till användarmeddelande
     await supabase.from("messages").insert({
       conversation_id: conversationId,
       role: "user",
       content: message,
     });
 
-    // Hämta senaste 30 meddelanden
     const { data: ctx } = await supabase
       .from("messages")
       .select("role, content")
@@ -104,34 +152,37 @@ export async function POST(req) {
       .order("created_at", { ascending: true })
       .limit(30);
 
-    // Skicka till OpenAI
-    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
     const completion = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       messages: [
         { role: "system", content: SYSTEM_PROMPT },
-        ...ctx.map(m => ({ role: m.role, content: m.content })),
+        ...ctx.map((m) => ({ role: m.role, content: m.content })),
       ],
     });
 
-    const reply = completion.choices?.[0]?.message?.content || "Inget svar.";
+    const reply =
+      completion.choices?.[0]?.message?.content || "Inget svar.";
 
-    // Spara AI-svar
     await supabase.from("messages").insert({
       conversation_id: conversationId,
       role: "assistant",
       content: reply,
     });
 
-    // Hämta full historik
     const { data: full } = await supabase
       .from("messages")
       .select("role, content")
       .eq("conversation_id", conversationId)
       .order("created_at", { ascending: true });
 
-    return new Response(JSON.stringify({ conversationId, reply, history: full || [] }), { status: 200, headers: headersCORS });
+    return new Response(
+      JSON.stringify({ conversationId, reply, history: full || [] }),
+      { status: 200, headers: headersCORS }
+    );
   } catch (err) {
-    return new Response(JSON.stringify({ error: err.message }), { status: 500, headers: headersCORS });
+    return new Response(JSON.stringify({ error: err.message }), {
+      status: 500,
+      headers: headersCORS,
+    });
   }
 }
